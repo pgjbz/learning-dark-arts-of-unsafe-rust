@@ -2,7 +2,9 @@ use std::{
     alloc::{self, Layout},
     marker::PhantomData,
     mem::size_of,
+    ops::{Deref, DerefMut},
     ptr::{self, NonNull},
+    slice::from_raw_parts_mut,
 };
 
 pub struct VecNomicon<T> {
@@ -70,6 +72,20 @@ impl<T> VecNomicon<T> {
             None => alloc::handle_alloc_error(new_layout),
         };
         self.cap = new_cap
+    }
+}
+
+impl<T> Deref for VecNomicon<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { std::slice::from_raw_parts(self.data.as_ptr(), self.len) }
+    }
+}
+
+impl<T> DerefMut for VecNomicon<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { std::slice::from_raw_parts_mut(self.data.as_ptr(), self.len) }
     }
 }
 

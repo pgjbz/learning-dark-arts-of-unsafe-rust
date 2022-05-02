@@ -8,7 +8,7 @@ fn main() {
     vecnom.push(20);
     vecnom.push(30);
     vecnom.push(40);
-    ops(vecnom);
+    for a in vecnom.iter() {
+        println!("{}", a)
+    }
 }
-
-fn ops(vecnom: VecNomicon<i32>) {}
