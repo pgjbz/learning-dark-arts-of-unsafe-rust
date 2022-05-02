@@ -4,20 +4,13 @@ use std::{
     mem::size_of,
     ops::{Deref, DerefMut},
     ptr::{self, NonNull},
+    slice::from_raw_parts_mut,
 };
 
 pub struct VecNomicon<T> {
     data: NonNull<T>,
     len: usize,
     cap: usize,
-    _marker: PhantomData<T>,
-}
-
-pub struct IntoIter<T> {
-    buf: NonNull<T>,
-    cap: usize,
-    start: *const T,
-    end: *const T,
     _marker: PhantomData<T>,
 }
 
@@ -67,20 +60,6 @@ impl<T> VecNomicon<T> {
         }
     }
 
-    pub fn remove(&mut self, index: usize) -> T {
-        assert!(index <= self.len, "index out of bounds");
-        unsafe {
-            self.len -= 1;
-            let result: T = ptr::read(self.data.as_ptr().add(index));
-            ptr::copy(
-                self.data.as_ptr().add(index + 1),
-                self.data.as_ptr().add(index),
-                self.len - index,
-            );
-            result
-        }
-    }
-
     fn grow(&mut self) {
         let zero_cap: bool = self.cap == 0;
         let (new_cap, new_layout): (usize, Layout) = if zero_cap {
@@ -107,28 +86,6 @@ impl<T> VecNomicon<T> {
         };
         self.cap = new_cap
     }
-
-    pub fn into_iter(self) -> IntoIter<T> {
-        let ptr = self.data;
-        let cap = self.cap;
-        let len = self.len;
-
-        std::mem::forget(self);
-
-        unsafe {
-            IntoIter {
-                buf: ptr,
-                cap: cap,
-                start: ptr.as_ptr(),
-                end: if cap == 0 {
-                    ptr.as_ptr()
-                } else {
-                    ptr.as_ptr().add(len)
-                },
-                _marker: PhantomData,
-            }
-        }
-    }
 }
 
 impl<T> Deref for VecNomicon<T> {
@@ -152,52 +109,6 @@ impl<T> Drop for VecNomicon<T> {
             unsafe {
                 let layout: Layout = Layout::array::<T>(self.cap).unwrap();
                 alloc::dealloc(self.data.as_ptr() as *mut u8, layout)
-            }
-        }
-    }
-}
-
-impl<T> Iterator for IntoIter<T> {
-    type Item = T;
-    fn next(&mut self) -> Option<T> {
-        if self.start == self.end {
-            None
-        } else {
-            unsafe {
-                let result = ptr::read(self.start);
-                self.start = self.start.offset(1);
-                Some(result)
-            }
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = (self.end as usize - self.start as usize) / std::mem::size_of::<T>();
-        (len, Some(len))
-    }
-}
-
-impl<T> DoubleEndedIterator for IntoIter<T> {
-    fn next_back(&mut self) -> Option<T> {
-        if self.start == self.end {
-            None
-        } else {
-            unsafe {
-                self.end = self.end.offset(-1);
-                Some(ptr::read(self.end))
-            }
-        }
-    }
-}
-
-impl<T> Drop for IntoIter<T> {
-    fn drop(&mut self) {
-        if self.cap != 0 {
-            // drop any remaining elements
-            for _ in &mut *self {}
-            let layout = Layout::array::<T>(self.cap).unwrap();
-            unsafe {
-                alloc::dealloc(self.buf.as_ptr() as *mut u8, layout);
             }
         }
     }
