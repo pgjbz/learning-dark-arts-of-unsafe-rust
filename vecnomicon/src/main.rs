@@ -8,6 +8,8 @@ fn main() {
     vecnom.push(20);
     vecnom.push(30);
     vecnom.push(40);
+    vecnom.insert(2, 25);
+    vecnom.remove(3);
     for a in vecnom.iter() {
         println!("{}", a)
     }

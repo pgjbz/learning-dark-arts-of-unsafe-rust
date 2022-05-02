@@ -33,7 +33,7 @@ impl<T> VecNomicon<T> {
             self.grow();
         }
         unsafe {
-            ptr::write(self.data.as_ptr().add(self.len), elemen);
+            ptr::write(self.data.as_ptr().add(self.len), elemen); //write data for the pointer
         }
         self.len += 1;
     }
@@ -43,7 +43,34 @@ impl<T> VecNomicon<T> {
             None
         } else {
             self.len -= 1;
-            unsafe { Some(ptr::read(self.data.as_ptr().add(self.len))) }
+            unsafe { Some(ptr::read(self.data.as_ptr().add(self.len))) } //read the value for safe
+        }
+    }
+
+    pub fn insert(&mut self, index: usize, elemen: T) {
+        assert!(index <= self.len, "index out of bounds");
+        unsafe {
+            ptr::copy(
+                self.data.as_ptr().add(index),     //copy from the index
+                self.data.as_ptr().add(index + 1), //copy dest
+                self.len - index,                  //quantity
+            );
+            ptr::write(self.data.as_ptr().add(index), elemen);
+            self.len += 1;
+        }
+    }
+
+    pub fn remove(&mut self, index: usize) -> T {
+        assert!(index <= self.len, "index out of bounds");
+        unsafe {
+            self.len -= 1;
+            let result: T = ptr::read(self.data.as_ptr().add(index));
+            ptr::copy(
+                self.data.as_ptr().add(index + 1),
+                self.data.as_ptr().add(index),
+                self.len - index,
+            );
+            result
         }
     }
 
