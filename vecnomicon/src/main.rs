@@ -10,6 +10,18 @@ fn main() {
     vecnom.push(40);
     vecnom.insert(2, 25);
     vecnom.remove(3);
+
+    println!("drain");
+
+    for aa in vecnom.drain() {
+        println!("{aa}");
+    }
+
+    vecnom.push(10);
+    vecnom.push(20);
+
+    println!("iter");
+
     for a in vecnom.iter() {
         println!("{}", a)
     }

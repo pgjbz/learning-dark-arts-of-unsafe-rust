@@ -12,15 +12,37 @@ pub struct VecNomicon<T> {
 }
 
 pub struct IntoIter<T> {
-    buf: RawMiconVec<T>,
-    start: *const T,
-    end: *const T,
+    _buf: RawMiconVec<T>,
+    iter: RawValIter<T>,
 }
 
 struct RawMiconVec<T> {
     data: NonNull<T>,
     cap: usize,
     _marker: PhantomData<T>,
+}
+
+pub struct Drain<'a, T: 'a> {
+    vec: PhantomData<&'a mut VecNomicon<T>>,
+    iter: RawValIter<T>,
+}
+
+struct RawValIter<T> {
+    start: *const T,
+    end: *const T,
+}
+
+impl<T> RawValIter<T> {
+    unsafe fn new(slice: &[T]) -> Self {
+        Self {
+            start: slice.as_ptr(),
+            end: if slice.len() == 0 {
+                slice.as_ptr()
+            } else {
+                slice.as_ptr().add(slice.len())
+            },
+        }
+    }
 }
 
 unsafe impl<T> Send for RawMiconVec<T> where T: Send {}
@@ -143,20 +165,22 @@ impl<T> VecNomicon<T> {
 
     pub fn into_iter(self) -> IntoIter<T> {
         unsafe {
+            let iter = RawValIter::new(&self);
             let buf = ptr::read(&self.buf);
-            let cap = self.cap();
-            let len = self.len;
 
             std::mem::forget(self);
 
-            IntoIter {
-                start: buf.data.as_ptr(),
-                end: if cap == 0 {
-                    buf.data.as_ptr()
-                } else {
-                    buf.data.as_ptr().add(len)
-                },
-                buf: buf,
+            IntoIter { iter, _buf: buf }
+        }
+    }
+
+    pub fn drain(&mut self) -> Drain<T> {
+        unsafe {
+            let iter: RawValIter<T> = RawValIter::new(&self);
+            self.len = 0;
+            Drain {
+                iter,
+                vec: PhantomData,
             }
         }
     }
@@ -185,6 +209,30 @@ impl<T> Drop for VecNomicon<T> {
 impl<T> Iterator for IntoIter<T> {
     type Item = T;
     fn next(&mut self) -> Option<T> {
+        self.iter.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl<T> DoubleEndedIterator for IntoIter<T> {
+    fn next_back(&mut self) -> Option<T> {
+        self.iter.next_back()
+    }
+}
+
+impl<T> Drop for IntoIter<T> {
+    fn drop(&mut self) {
+        // drop any remaining elements
+        for _ in &mut *self {}
+    }
+}
+
+impl<T> Iterator for RawValIter<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
         if self.start == self.end {
             None
         } else {
@@ -202,7 +250,7 @@ impl<T> Iterator for IntoIter<T> {
     }
 }
 
-impl<T> DoubleEndedIterator for IntoIter<T> {
+impl<T> DoubleEndedIterator for RawValIter<T> {
     fn next_back(&mut self) -> Option<T> {
         if self.start == self.end {
             None
@@ -215,9 +263,24 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
     }
 }
 
-impl<T> Drop for IntoIter<T> {
+impl<'a, T> Iterator for Drain<'a, T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        self.iter.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl<'a, T> DoubleEndedIterator for Drain<'a, T> {
+    fn next_back(&mut self) -> Option<T> {
+        self.iter.next_back()
+    }
+}
+
+impl<'a, T> Drop for Drain<'a, T> {
     fn drop(&mut self) {
-        // drop any remaining elements
         for _ in &mut *self {}
     }
 }
