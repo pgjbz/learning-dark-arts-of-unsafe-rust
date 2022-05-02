@@ -7,40 +7,100 @@ use std::{
 };
 
 pub struct VecNomicon<T> {
-    data: NonNull<T>,
+    buf: RawMiconVec<T>,
     len: usize,
-    cap: usize,
-    _marker: PhantomData<T>,
 }
 
 pub struct IntoIter<T> {
-    buf: NonNull<T>,
-    cap: usize,
+    buf: RawMiconVec<T>,
     start: *const T,
     end: *const T,
+}
+
+struct RawMiconVec<T> {
+    data: NonNull<T>,
+    cap: usize,
     _marker: PhantomData<T>,
 }
 
+unsafe impl<T> Send for RawMiconVec<T> where T: Send {}
+unsafe impl<T> Sync for RawMiconVec<T> where T: Sync {}
 unsafe impl<T> Send for VecNomicon<T> where T: Send {}
 unsafe impl<T> Sync for VecNomicon<T> where T: Sync {}
+
+impl<T> RawMiconVec<T> {
+    fn new() -> Self {
+        assert_ne!(0, size_of::<T>(), "We're not read to handle ZST's");
+        Self {
+            cap: 0,
+            data: NonNull::dangling(),
+            _marker: PhantomData,
+        }
+    }
+
+    fn grow(&mut self) {
+        let (new_cap, new_layout) = if self.cap == 0 {
+            (1, Layout::array::<T>(1).unwrap())
+        } else {
+            let new_cap = self.cap * 2;
+            (new_cap, Layout::array::<T>(new_cap).unwrap())
+        };
+
+        assert!(new_layout.size() <= usize::MAX, "allocation is so large");
+        let new_ptr = if self.cap == 0 {
+            unsafe { alloc::alloc(new_layout) }
+        } else {
+            let old_layout = Layout::array::<T>(self.cap).unwrap();
+            let old_ptr = self.data.as_ptr() as *mut u8;
+            unsafe { alloc::realloc(old_ptr, old_layout, new_layout.size()) }
+        };
+
+        self.data = match NonNull::new(new_ptr as *mut T) {
+            Some(ptr) => ptr,
+            None => alloc::handle_alloc_error(new_layout),
+        };
+        self.cap = new_cap;
+    }
+}
+
+impl<T> Drop for RawMiconVec<T> {
+    fn drop(&mut self) {
+        if self.cap != 0 {
+            let layout = Layout::array::<T>(self.cap).unwrap();
+            unsafe {
+                alloc::dealloc(self.data.as_ptr() as *mut u8, layout);
+            }
+        }
+    }
+}
 
 impl<T> VecNomicon<T> {
     pub fn new() -> Self {
         assert_ne!(0, size_of::<T>(), "We're not read to handle ZST's");
         Self {
             len: 0,
-            cap: 0,
-            _marker: PhantomData::default(),
-            data: NonNull::dangling(),
+            buf: RawMiconVec::new(),
         }
     }
 
+    fn cap(&self) -> usize {
+        self.buf.cap
+    }
+
+    fn data(&self) -> *mut T {
+        self.buf.data.as_ptr()
+    }
+
+    fn grow(&mut self) {
+        self.buf.grow()
+    }
+
     pub fn push(&mut self, elemen: T) {
-        if self.len == self.cap {
+        if self.len == self.cap() {
             self.grow();
         }
         unsafe {
-            ptr::write(self.data.as_ptr().add(self.len), elemen); //write data for the pointer
+            ptr::write(self.data().add(self.len), elemen); //write data for the pointer
         }
         self.len += 1;
     }
@@ -50,7 +110,7 @@ impl<T> VecNomicon<T> {
             None
         } else {
             self.len -= 1;
-            unsafe { Some(ptr::read(self.data.as_ptr().add(self.len))) } //read the value for safe
+            unsafe { Some(ptr::read(self.data().add(self.len))) } //read the value for safe
         }
     }
 
@@ -58,11 +118,11 @@ impl<T> VecNomicon<T> {
         assert!(index <= self.len, "index out of bounds");
         unsafe {
             ptr::copy(
-                self.data.as_ptr().add(index),     //copy from the index
-                self.data.as_ptr().add(index + 1), //copy dest
-                self.len - index,                  //quantity
+                self.data().add(index),     //copy from the index
+                self.data().add(index + 1), //copy dest
+                self.len - index,           //quantity
             );
-            ptr::write(self.data.as_ptr().add(index), elemen);
+            ptr::write(self.data().add(index), elemen);
             self.len += 1;
         }
     }
@@ -71,61 +131,32 @@ impl<T> VecNomicon<T> {
         assert!(index <= self.len, "index out of bounds");
         unsafe {
             self.len -= 1;
-            let result: T = ptr::read(self.data.as_ptr().add(index));
+            let result: T = ptr::read(self.data().add(index));
             ptr::copy(
-                self.data.as_ptr().add(index + 1),
-                self.data.as_ptr().add(index),
+                self.data().add(index + 1),
+                self.data().add(index),
                 self.len - index,
             );
             result
         }
     }
 
-    fn grow(&mut self) {
-        let zero_cap: bool = self.cap == 0;
-        let (new_cap, new_layout): (usize, Layout) = if zero_cap {
-            (1, Layout::array::<T>(1).unwrap())
-        } else {
-            let new_cap: usize = 1 * self.cap;
-            (new_cap, Layout::array::<T>(new_cap).unwrap())
-        };
-
-        assert!(
-            new_layout.size() <= isize::MAX as usize,
-            "allocation is too large"
-        );
-        let new_ptr: *mut u8 = if zero_cap {
-            unsafe { alloc::alloc(new_layout) }
-        } else {
-            let old_layout: Layout = Layout::array::<T>(self.cap).unwrap();
-            let old_ptr: *mut u8 = self.data.as_ptr() as *mut u8;
-            unsafe { alloc::realloc(old_ptr, old_layout, new_layout.size()) }
-        };
-        self.data = match NonNull::new(new_ptr as *mut T) {
-            Some(p) => p,
-            None => alloc::handle_alloc_error(new_layout),
-        };
-        self.cap = new_cap
-    }
-
     pub fn into_iter(self) -> IntoIter<T> {
-        let ptr = self.data;
-        let cap = self.cap;
-        let len = self.len;
-
-        std::mem::forget(self);
-
         unsafe {
+            let buf = ptr::read(&self.buf);
+            let cap = self.cap();
+            let len = self.len;
+
+            std::mem::forget(self);
+
             IntoIter {
-                buf: ptr,
-                cap: cap,
-                start: ptr.as_ptr(),
+                start: buf.data.as_ptr(),
                 end: if cap == 0 {
-                    ptr.as_ptr()
+                    buf.data.as_ptr()
                 } else {
-                    ptr.as_ptr().add(len)
+                    buf.data.as_ptr().add(len)
                 },
-                _marker: PhantomData,
+                buf: buf,
             }
         }
     }
@@ -135,25 +166,19 @@ impl<T> Deref for VecNomicon<T> {
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
-        unsafe { std::slice::from_raw_parts(self.data.as_ptr(), self.len) }
+        unsafe { std::slice::from_raw_parts(self.data(), self.len) }
     }
 }
 
 impl<T> DerefMut for VecNomicon<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { std::slice::from_raw_parts_mut(self.data.as_ptr(), self.len) }
+        unsafe { std::slice::from_raw_parts_mut(self.data(), self.len) }
     }
 }
 
 impl<T> Drop for VecNomicon<T> {
     fn drop(&mut self) {
-        if self.cap != 0 {
-            while let Some(_) = self.pop() {}
-            unsafe {
-                let layout: Layout = Layout::array::<T>(self.cap).unwrap();
-                alloc::dealloc(self.data.as_ptr() as *mut u8, layout)
-            }
-        }
+        while let Some(_) = self.pop() {}
     }
 }
 
@@ -192,13 +217,7 @@ impl<T> DoubleEndedIterator for IntoIter<T> {
 
 impl<T> Drop for IntoIter<T> {
     fn drop(&mut self) {
-        if self.cap != 0 {
-            // drop any remaining elements
-            for _ in &mut *self {}
-            let layout = Layout::array::<T>(self.cap).unwrap();
-            unsafe {
-                alloc::dealloc(self.buf.as_ptr() as *mut u8, layout);
-            }
-        }
+        // drop any remaining elements
+        for _ in &mut *self {}
     }
 }

@@ -13,4 +13,8 @@ fn main() {
     for a in vecnom.iter() {
         println!("{}", a)
     }
+    println!("into iter");
+    for b in vecnom.into_iter() {
+        println!("{}", b);
+    }
 }
