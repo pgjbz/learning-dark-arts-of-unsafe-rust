@@ -2,7 +2,6 @@ use std::{
     marker::PhantomData,
     ops::Deref,
     ptr::NonNull,
-    rc::Rc,
     sync::atomic::{self, AtomicUsize, Ordering},
 };
 
